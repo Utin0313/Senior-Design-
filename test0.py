@@ -45,7 +45,7 @@ def predict(x):
 st.set_page_config(page_title="Validation Test", layout="centered")
 st.title("🧪 Validation Image Model Test")
 
-uploaded = st.file_uploader("Upload a validation image", type=["png", "jpg", "jpeg"])
+uploaded = st.file_uploader("/home/project/Documents/Senior-Design-/Breast_1_Test_1_20251216_143828_masked", type=["png", "jpg", "jpeg"])
 
 if uploaded is not None:
 
