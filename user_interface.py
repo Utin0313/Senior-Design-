@@ -11,7 +11,7 @@ from picamera2 import Picamera2
 # -- Model setup --
 CLASS_NAMES = ["Breast", "Control", "Prostate", "Skin"]
 
-model = tf.keras.models.load_model("/home/project/app/resnet50_simple_classifier.keras")
+model = tf.keras.models.load_model("/home/project/app/resnet50_cancer_classifier.keras")
 
 # -- Camera setup --
 if st.session_state.get("picam2") is None:
@@ -45,7 +45,6 @@ def generate_brightness_mask_array(
     brightness_min,
     brightness_max,
     dot_saturation_min=80,
-    strip_brightness_min=140
 ):
     img = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
@@ -54,14 +53,13 @@ def generate_brightness_mask_array(
     saturation = hsv[:, :, 1]
 
     bg_mask = cv2.inRange(brightness, brightness_min, brightness_max)
+    
     dot_mask = (saturation >= dot_saturation_min).astype(np.uint8) * 255
-    strip_mask = (brightness >= strip_brightness_min).astype(np.uint8) * 255
 
-    keep_mask = cv2.bitwise_or(dot_mask, strip_mask)
-    remove_mask = cv2.bitwise_and(bg_mask, cv2.bitwise_not(keep_mask))
-    keep_mask_final = cv2.bitwise_not(remove_mask)
+    remove_mask = cv2.bitwise_and(bg_mask, cv2.bitwise_not(dot_mask))
+    keep_mask = cv2.bitwise_not(remove_mask)
 
-    result = cv2.bitwise_and(img_array, img_array, mask=keep_mask_final)
+    result = cv2.bitwise_and(img_array, img_array, mask=keep_mask)
     return result
 
 def preprocess(frame):
@@ -81,11 +79,12 @@ def preprocess(frame):
 
     img = img.crop((left, top, right, bottom))
 
-    st.image(img, caption="Cropped Image", use_container_width=True)
+    # -- Debug -- 
     img.save("/home/project/Pictures/debug_1_crop.jpg")
 
     img_arr = np.array(img)
 
+ 
     img_arr = generate_brightness_mask_array(
         img_arr,
         brightness_min=0,
@@ -93,8 +92,12 @@ def preprocess(frame):
         dot_saturation_min=80
     )
 
+	
+    # -- Debug -- 
+    st.image(img_arr, caption="After Mask", use_container_width=True)
+    
     img = Image.fromarray(img_arr)
-
+    
     # ResNet50 input size
     img = img.resize((224, 224))
 
