@@ -106,11 +106,7 @@ def predict(x):
 st.set_page_config(page_title="Cancer Classifier", layout="centered")
 st.title(":microscope: Cancer Tissue Classifier (Stable Inference Mode)")
 
-<<<<<<< HEAD
-uploaded = st.file_uploader("/home/project/Documents/Senior-Design-/Breast_1_Test_1_20251216_143828_masked", type=["png", "jpg", "jpeg"])
-=======
 st.caption("Real-time inference stabilized (no retraining required)")
->>>>>>> 42b57f65b0123422605c3668f47c4cede7ea1900
 
 if st.button("Capture & Classify", use_container_width=True):
 
