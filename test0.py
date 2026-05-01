@@ -65,72 +65,48 @@ CAM_X_PIXEL, CAM_Y_PIXEL = 4056, 3040
 # -------------------------
 def preprocess(frame):
 
-    # --- Convert to PIL RGB ---
     img = Image.fromarray(frame).convert("RGB")
+
+    # --- crop ---
     width, height = img.size
 
-    # --- Normalize crop ---
     x1 = CROP_X / CAM_X_PIXEL
     x2 = (CROP_X + CROP_W) / CAM_X_PIXEL
     y1 = CROP_Y / CAM_Y_PIXEL
     y2 = (CROP_Y + CROP_H) / CAM_Y_PIXEL
 
-    left = int(x1 * width)
-    right = int(x2 * width)
-    top = int(y1 * height)
-    bottom = int(y2 * height)
+    img = img.crop((
+        int(x1 * width),
+        int(y1 * height),
+        int(x2 * width),
+        int(y2 * height)
+    ))
 
-    img = img.crop((left, top, right, bottom))
+    st.image(img, caption="Cropped Input")
 
-    st.image(img, caption="1. Cropped Input")
+    img_np = np.array(img).astype(np.uint8)
 
-    # --- Convert to numpy RGB ---
-    img_np = np.array(img).astype(np.float32)
+    # --- LIGHT contrast enhancement (NOT masking) ---
+    lab = cv2.cvtColor(img_np, cv2.COLOR_RGB2LAB)
+    l, a, b = cv2.split(lab)
 
-    # -------------------------
-    # STRIP DETECTION MASK
-    # -------------------------
-    hsv = cv2.cvtColor(img_np.astype(np.uint8), cv2.COLOR_RGB2HSV)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    l = clahe.apply(l)
 
-    saturation = hsv[:, :, 1]
+    img_np = cv2.merge((l, a, b))
+    img_np = cv2.cvtColor(img_np, cv2.COLOR_LAB2RGB)
 
-    # test strip = high saturation
-    strip_mask = (saturation > 80).astype(np.float32)
+    st.image(img_np, caption="Contrast Enhanced (CLAHE)")
 
-    strip_mask_3ch = np.repeat(strip_mask[:, :, None], 3, axis=2)
-
-    # -------------------------
-    # BLACK BACKGROUND
-    # -------------------------
-    img_np = img_np * strip_mask_3ch
-
-    st.image(img_np.astype(np.uint8), caption="2. After Black Background Mask")
-
-    # -------------------------
-    # NOISE ONLY ON STRIP
-    # -------------------------
-    noise = np.random.normal(0, 0.05, img_np.shape).astype(np.float32)
-    img_np = img_np + noise * strip_mask_3ch
-
-    img_np = np.clip(img_np, 0, 255)
-
-    st.image(img_np.astype(np.uint8), caption="3. After Noise Injection")
-
-    # -------------------------
-    # RESIZE
-    # -------------------------
+    # --- resize ---
     img_np = cv2.resize(img_np, (224, 224))
 
-    st.image(img_np.astype(np.uint8), caption="4. Resized (224x224)")
+    # --- ResNet preprocessing ---
+    img_np = tf.keras.applications.resnet50.preprocess_input(
+        img_np.astype(np.float32)
+    )
 
-    # -------------------------
-    # RESNET PREPROCESS
-    # -------------------------
-    img_np = tf.keras.applications.resnet50.preprocess_input(img_np)
-
-    img_np = np.expand_dims(img_np, axis=0)
-
-    return img_np
+    return np.expand_dims(img_np, axis=0)
 
 
 # -------------------------
