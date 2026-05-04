@@ -1,146 +1,209 @@
 #!/usr/bin/env python
 import streamlit as st
 import tensorflow as tf
+import cv2
+import atexit
+import time
 import numpy as np
 from PIL import Image
 from picamera2 import Picamera2
-import time
+from gpiozero import PWMLED, RotaryEncoder
 
-# -------------------------
-# MODEL
-# -------------------------
+# -- Model setup --
 CLASS_NAMES = ["Breast", "Control", "Prostate", "Skin"]
+ 
+model = tf.keras.models.load_model("/home/project/app/resnet50_classifier.keras")
 
-model = tf.keras.models.load_model(
-    "/home/project/app/resnet50_cancer_classifier.keras"
-)
+# -- GPIO pins -- 
+PIN_PWM = 13
+PIN_CLK = 4
+PIN_DT = 17 
 
-# -------------------------
-# CAMERA SETUP
-# -------------------------
+# -- Initialize once -- 
+if "led" not in st.session_state:
+    st.session_state.led = PWMLED(PIN_PWM, frequency=1000)
+    
+if "encoder" not in st.session_state:
+    st.session_state.encoder = RotaryEncoder(PIN_CLK, PIN_DT, wrap=False)    
+    
+if "brightness" not in st.session_state: 
+    st.session_state.brightness = 0.5
+    st.session_state.led.value = 0.5
+
+# -- Encoder Callback --
+def update_brightness():
+    encoder = st.session_state.encoder
+    led = st.session_state.led
+    
+    new_val = (encoder.value + 1) / 2
+    new_val = max(0.0, min(1.0, new_val)) 
+    
+    led.value = new_val
+    st.session_state.brightness = new_val 
+    
+# -- Attach callback once -- 
+if "encoder_initialized" not in st.session_state:
+    st.session_state.encoder.when_rotated = update_brightness
+    st.session_state.encoder_initialized = True 
+
+# -- Camera setup --
 if st.session_state.get("picam2") is None:
     picam2 = Picamera2()
-
     picam2.configure(picam2.create_still_configuration())
-
-    picam2.start()
     time.sleep(2)
-
-    # 🔥 LOCK CAMERA (critical for stability)
-    picam2.set_controls({
-        "AeEnable": False,   # disable auto exposure
-        "AwbEnable": False,  # disable auto white balance
-    })
-
+    picam2.start()
     st.session_state.picam2 = picam2
 else:
     picam2 = st.session_state.picam2
 
+def cleanup():
+    picam2 = st.session_state.get("picam2")
+    if picam2 is not None:
+        try:
+            picam2.stop()
+            picam2.close()
+        except:
+            pass
 
-# -------------------------
-# CAPTURE FRAME
-# -------------------------
+atexit.register(cleanup)
+
 def capture_frame():
-    frame = picam2.capture_array()
+    return picam2.capture_array()
 
-    if frame.dtype != np.uint8:
-        frame = frame.astype(np.uint8)
-
-    return frame
-
-
-# -------------------------
-# CROP SETTINGS
-# -------------------------
 CROP_X, CROP_Y, CROP_W, CROP_H = 1740, 1032, 402, 762
 CAM_X_PIXEL, CAM_Y_PIXEL = 4056, 3040
 
+def generate_brightness_mask_array(
+    img_array,
+    brightness_min,
+    brightness_max,
+    dot_saturation_min=80,
+):
+    img = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-# -------------------------
-# PREPROCESS (REAL-TIME ONLY FIX)
-# -------------------------
+    brightness = hsv[:, :, 2]
+    saturation = hsv[:, :, 1]
+
+    bg_mask = cv2.inRange(brightness, brightness_min, brightness_max)
+    
+    dot_mask = (saturation >= dot_saturation_min).astype(np.uint8) * 255
+
+    remove_mask = cv2.bitwise_and(bg_mask, cv2.bitwise_not(dot_mask))
+    keep_mask = cv2.bitwise_not(remove_mask)
+
+    result = cv2.bitwise_and(img_array, img_array, mask=keep_mask)
+    return result
+
 def preprocess(frame):
-
     img = Image.fromarray(frame).convert("RGB")
+
     width, height = img.size
 
-    # --- fixed crop ---
-    x1 = int((CROP_X / CAM_X_PIXEL) * width)
-    x2 = int(((CROP_X + CROP_W) / CAM_X_PIXEL) * width)
-    y1 = int((CROP_Y / CAM_Y_PIXEL) * height)
-    y2 = int(((CROP_Y + CROP_H) / CAM_Y_PIXEL) * height)
+    x1 = CROP_X / CAM_X_PIXEL
+    x2 = (CROP_X + CROP_W) / CAM_X_PIXEL
+    y1 = CROP_Y / CAM_Y_PIXEL
+    y2 = (CROP_Y + CROP_H) / CAM_Y_PIXEL
 
-    img = img.crop((x1, y1, x2, y2))
+    left = int(x1 * width)
+    right = int(x2 * width)
+    top = int(y1 * height)
+    bottom = int(y2 * height)
 
-    st.image(img, caption="Cropped Input (Model sees this)")
+    img = img.crop((left, top, right, bottom))
 
-    # --- mild normalization (camera drift correction only) ---
-    img_np = np.array(img).astype(np.float32)
+    # -- Debug -- 
+    img.save("/home/project/Pictures/debug_1_crop.jpg")
 
-    mean = np.mean(img_np)
-    img_np = (img_np / (mean + 1e-6)) * 128.0
-    img_np = np.clip(img_np, 0, 255)
+    img_arr = np.array(img)
 
-    # --- resize (PIL for stability) ---
-    img = Image.fromarray(img_np.astype(np.uint8))
-    img = img.resize((224, 224), Image.BICUBIC)
+ 
+    img_arr = generate_brightness_mask_array(
+        img_arr,
+        brightness_min=0,
+        brightness_max=225,
+        dot_saturation_min=80
+    )
 
-    img_np = np.array(img).astype(np.float32)
+	
+    # -- Debug -- 
+    # st.image(img_arr, caption="After Mask", use_container_width=True)
+    
+    img = Image.fromarray(img_arr)
+    
+    # ResNet50 input size
+    img = img.resize((224, 224))
 
-    # --- ResNet preprocessing (must match training) ---
-    img_np = tf.keras.applications.resnet50.preprocess_input(img_np)
+    # IMPORTANT: use same preprocessing as training/testing
+    arr = np.array(img, dtype=np.float32)
+    arr = tf.keras.applications.resnet50.preprocess_input(arr)
+    arr = np.expand_dims(arr, axis=0)
 
-    return np.expand_dims(img_np, axis=0)
+    debug_img = Image.fromarray(np.array(img).astype(np.uint8))
+    debug_img.save("/home/project/Pictures/debug_3_preprocessed.jpg")
 
+    return arr
 
-# -------------------------
-# PREDICTION
-# -------------------------
-def predict(x):
-    return model.predict(x, verbose=0)[0]
+def predict(preprocessed):
+    output = model.predict(preprocessed, verbose=0)
+    return output[0]
 
+# -- Streamlit UI --
+st.set_page_config(page_title="Cancer Classifier", page_icon=":microscope:", layout="centered")
+st.title(":microscope: Cancer Tissue Classifier")
+st.caption("ResNet50 Breast Control Prostate Skin")
 
-# -------------------------
-# UI
-# -------------------------
-st.set_page_config(page_title="Cancer Classifier", layout="centered")
-st.title(":microscope: Cancer Tissue Classifier (Stable Inference Mode)")
+st.subheader(":bulb: LED Brightness Control")
 
-st.caption("Real-time inference stabilized (no retraining required)")
+slider_val = st.slider(
+    "Brightness",
+    0.0,
+    1.0,
+    st.session_state.brightness,
+    key="brightness_slider"
+)
+    
+# Sync slider 
+if slider_val != st.session_state.brightness:
+    st.session_state.led.value = slider_val
+    st.session_state.brightness = slider_val    
 
-if st.button("Capture & Classify", use_container_width=True):
+if st.button(":microscope: Capture & Classify", use_container_width=True):
+    with st.spinner("Capturing and analysing..."):
+        frame = capture_frame()
+        tensor = preprocess(frame)
+        probs = predict(tensor)
 
-    # capture
-    frame = capture_frame()
+        top_idx = np.argmax(probs)
+        label = CLASS_NAMES[top_idx]
+        confidence = probs[top_idx] * 100
 
-    st.image(frame, caption="Raw Camera Frame")
-
-    # preprocess
-    tensor = preprocess(frame)
-
-    # predict
-    probs = predict(tensor)
-
-    idx = int(np.argmax(probs))
-    label = CLASS_NAMES[idx]
-    confidence = probs[idx] * 100
-
-    # results
     col1, col2 = st.columns(2)
 
     with col1:
-        st.metric("Prediction", label)
-        st.metric("Confidence", f"{confidence:.2f}%")
+        st.image(frame, caption="Captured frame", use_container_width=True)
 
     with col2:
-        st.image(frame, caption="Input Frame")
+        st.metric("Prediction", label)
+        st.metric("Confidence", f"{confidence:.1f}%")
+
+        if label == "Control":
+            st.success("No cancer tissue detected")
+        else:
+            st.warning(f"{label} cancer tissue detected")
 
     st.divider()
-    st.subheader("Class Probabilities")
+    st.subheader("All class probabilities")
 
-    for name, p in zip(CLASS_NAMES, probs):
-        st.write(f"{name}: {p*100:.2f}%")
-        st.progress(float(p))
+    for name, prob in zip(CLASS_NAMES, probs):
+        st.progress(float(prob), text=f"{name}: {prob*100:.1f}%")
 
-    st.divider()
-    st.write("Raw output:", probs)
+
+# -- Auto Refresh -- 
+from streamlit_autorefresh import st_autorefresh
+st_autorefresh(interval=500)
+
+
+
+
+
