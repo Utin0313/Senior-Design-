@@ -10,8 +10,8 @@ from picamera2 import Picamera2
 
 # -- Model setup --
 CLASS_NAMES = ["Breast", "Control", "Prostate", "Skin"]
-
-model = tf.keras.models.load_model("/home/project/app/resnet50_cancer_classifier.keras")
+ 
+model = tf.keras.models.load_model("/home/project/app/resnet50_classifier.keras")
 
 # -- Camera setup --
 if st.session_state.get("picam2") is None:
@@ -88,7 +88,7 @@ def preprocess(frame):
     img_arr = generate_brightness_mask_array(
         img_arr,
         brightness_min=0,
-        brightness_max=144,
+        brightness_max=225,
         dot_saturation_min=80
     )
 
