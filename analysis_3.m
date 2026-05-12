@@ -1,7 +1,7 @@
 clc; clear; close all 
 
 % -- Load data --  
-data = readtable('prediction_n10.csv'); 
+data = readtable('prediction_n18.csv'); 
 
 % -- True labels -- 
 labels = strcmp(data.real, 'prostate');  % replace (i.e., 'control', 'prostate', 'skin') for the diff plot

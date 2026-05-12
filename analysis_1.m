@@ -41,7 +41,7 @@ plot(x(correct), subset.confidence(correct), 'o', 'MarkerSize', 8, 'LineWidth', 
 % Plot incorrect 
 plot(x(~correct), subset.confidence(~correct), 'x', 'MarkerSize', 8, 'LineWidth', 1.5)
 
-yline(0.7, '--k', 'Threshold = 0.7') 
+yline(0.85, '--k', 'Threshold = 0.85') 
 legend('Correct', 'Incorrect', 'Threshold')
 xlabel('Sample Index')
 ylabel('Confidence')
